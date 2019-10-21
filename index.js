@@ -1,89 +1,91 @@
-const webpack = require('webpack')
-const realFs = require('fs')
-const path = require('path')
-const memfs = require('memfs')
-const joinPath = require('memory-fs/lib/join')
+const webpack = require("webpack");
+const realFs = require("fs");
+const path = require("path");
+const memfs = require("memfs");
+const joinPath = require("memory-fs/lib/join");
+const recursive = require("recursive-readdir");
 
-const babelConfig = require('./.babelrc.js')
-const loadDependenciesInMemory = require('./loadDependenciesInMemory')
-
+const babelConfig = require("./.babelrc.js");
+const loadDependenciesInMemory = require("./loadDependenciesInMemory");
 
 // create memory fs with the index.js file
 const vol = new memfs.Volume.fromJSON({
-  // /memfs will be the root dir for memfs, helps to distinguish from 
-  // real FS in error messages
-  '/memfs/index.js': `
+  "index.js": `
     console.log('Hello world')
   `
-})
-const fs = ensureWebpackMemoryFs(memfs.createFsFromVolume(vol))
+});
+const inmemfs = ensureWebpackMemoryFs(memfs.createFsFromVolume(vol));
 
 // what this function does is basically copies the files for dep tree into the memory
 loadDependenciesInMemory({
-  packages: ['babel-loader'],
-  rootPath: '/memfs/',
+  packages: ["babel-loader"],
+  rootPath: "",
   fs: {
     input: realFs,
-    output: fs,
-  },
+    output: inmemfs
+  }
 })
-.then(() => {
-  const compiler = webpack({
-    mode: 'production',
-    entry: '/memfs/index.js',
-    context: '/memfs/',
-    output: {
-      filename: '[name].min.js',
-      path: '/memfs/dist',
-    },
-  
-    module: {
-      rules: [
-        {
-          test: /\.js$/,
-          exclude: /node_modules/,
-          use: {
-            loader: 'babel-loader',
-            options: babelConfig,
-          },
-        },
-      ],
-    },
+  .then(() => {
+    const compiler = webpack({
+      mode: "production",
+      entry: "./index.js",
+      output: {
+        filename: "bundle.js",
+        path: "/dist"
+      },
+
+      module: {
+        rules: [
+          {
+            test: /\.js$/,
+            exclude: /node_modules/,
+            use: {
+              loader: "babel-loader",
+              options: babelConfig
+            }
+          }
+        ]
+      }
+    });
+
+    compiler.inputFileSystem = inmemfs;
+    compiler.outputFileSystem = inmemfs;
+
+    compiler.run(function webpackCompilerRunCallback(err, stats) {
+      if (err) {
+        console.error(err);
+        return;
+      }
+      if (stats.hasErrors()) {
+        realFs.writeFileSync("./error.js", stats.toJson().errors);
+        console.error(stats.toJson().errors);
+        return;
+      }
+      if (stats.hasWarnings()) {
+        console.warn(stats.toJson().warnings);
+      }
+
+      inmemfs.readFile("/dist/bundle.js", (e, data) => {
+        if (e) return console.log(e);
+        console.log("bundle.js", data.toString());
+      });
+
+      console.log(stats.toJson("minimal"));
+    });
   })
-
-  compiler.inputFileSystem = fs
-  compiler.outputFileSystem = fs
-
-  compiler.run(function webpackCompilerRunCallback(err, stats) {
-    if (err) {
-      console.error(err)
-      return
-    }
-    if (stats.hasErrors()) {
-      console.error(stats.toJson().errors)
-      return
-    }
-    if (stats.hasWarnings()) {
-      console.warn(stats.toJson().warnings)
-    }
-  
-    console.log(stats.toJson('minimal'))
-  })
-
-})
-.catch(err => {
-  throw err
-})
+  .catch(err => {
+    throw err;
+  });
 
 function ensureWebpackMemoryFs(fs) {
   // Return it back, when it has Webpack 'join' method
   if (fs.join) {
-    return fs
+    return fs;
   }
 
   // Create FS proxy, adding `join` method to memfs, but not modifying original object
-  const nextFs = Object.create(fs)
-  nextFs.join = joinPath
+  const nextFs = Object.create(fs);
+  nextFs.join = joinPath;
 
-  return nextFs
+  return nextFs;
 }
